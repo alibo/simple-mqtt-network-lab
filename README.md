@@ -62,10 +62,13 @@ mqtt:
   client_id: backend-1
   keepalive_secs: 30
   protocol_version: 3   # MQTT 3.1
+  clean_session: true    # default
 retry:
   enabled: true
   connect_timeout_ms: 5000
   max_reconnect_interval_ms: 10000
+  ping_timeout_ms: 5000
+  write_timeout_ms: 5000
 ## App-level ping/pong removed. Built-in MQTT keepalive (PINGREQ/PINGRESP) is used.
 publish:
   offer_every_ms: 1000
@@ -75,8 +78,8 @@ qos:
   offer: 0
   ride: 0
 payload_bytes:
-  offer: 100
-  ride: 120
+  offer: 4096
+  ride: 4096
 socket:
   tcp_keepalive_secs: 60
   tcp_nodelay: true
@@ -100,6 +103,7 @@ mqtt:
   client_id: java-1
   keepalive_secs: 30
   protocol_version: 3   # MQTT 3.1
+  clean_session: true    # default
 retry:
   enabled: true
   automatic_reconnect: true
@@ -110,7 +114,7 @@ qos:
   offer: 0
   ride: 0
 payload_bytes:
-  location: 80
+  location: 4096
 socket:
   tcp_keepalive: true
   tcp_nodelay: true
@@ -212,6 +216,64 @@ Note: JFR requires a JDK (we run on OpenJDK 17 slim). Retrieve the recorded JFR 
 
 - HAProxy runs with TCP logging enabled and acts as a front door to EMQX cluster via round‑robin.
 - EMQX 5.8 cluster (3 nodes) is formed with static seeds. Dashboard is exposed on http://localhost:18083 (admin/public).
+
+## MQTT Keepalive & Reconnect
+
+### Keepalive Basics
+- Purpose: Detect half‑open TCP connections without application pings.
+- Mechanism: Client must send any MQTT control packet within the negotiated keepalive interval; if idle, it sends PINGREQ. The broker replies with PINGRESP.
+- Broker side timeout: Most brokers (including EMQX) consider the connection dead after roughly 1.5 × keepalive with no incoming control packets.
+- Client side timeout:
+  - Java: handled internally by Paho; when PINGRESP is not received, `connectionLost()` fires and auto‑reconnect kicks in if enabled.
+  - Go: configured via `retry.ping_timeout_ms` (default 5000 ms). If a PINGRESP is not received within this window, the client treats the connection as lost.
+
+Both apps use MQTT keepalive only (no app‑level ping/pong). Enable debug logs to see PINGREQ/PINGRESP traces.
+
+### Reconnect Backoff
+- Java client (Paho MqttAsyncClient):
+  - Auto‑reconnect enabled via `retry.automatic_reconnect: true`.
+  - Exponential backoff doubles per attempt and caps at `maxReconnectDelay` (Paho default ≈ 128 s if not set).
+  - Connect timeout controls how long each handshake may take (`retry.connect_timeout_ms`).
+  - Note: Paho Java’s `setMaxReconnectDelay(..)` expects seconds. Our YAML key `retry.max_reconnect_delay_ms` is milliseconds; the example below uses seconds for readability.
+- Go backend (paho.mqtt.golang):
+  - Auto‑reconnect enabled via `retry.enabled: true`.
+  - Exponential backoff with a cap at `retry.max_reconnect_interval_ms`.
+  - `retry.connect_timeout_ms` limits each connect attempt’s handshake; `retry.ping_timeout_ms` bounds how long to wait for PINGRESP.
+
+### Example: Paho Java Auto‑Reconnect Timeline
+
+Config:
+
+keepalive = 120 s → connection considered lost after ~180 s (1.5 × KA)
+
+connect timeout = 30 s
+
+maxReconnectDelay = default ≈ 128 s (2 min)
+
+Backoff pattern: 1 → 2 → 4 → 8 → 16 → 32 → 64 → 128 → 128 …
+
+⏱ Event Timeline (network down → up to 5 min)
+```
+t =   0 s  | Normal operation
+t = 180 s  | No packets for 1.5×KeepAlive → connectionLost() triggered
+            | Auto-reconnect loop starts
+──────────────────────────────────────────────────────────────────────
+Attempt #1  | delay=0 s   connect timeout=30 s   (180–210 s)
+Attempt #2  | delay=1 s   connect timeout=30 s   (211–241 s)
+Attempt #3  | delay=2 s   connect timeout=30 s   (243–273 s)
+Attempt #4  | delay=4 s   connect timeout=30 s   (277–307 s)
+Attempt #5  | delay=8 s   connect timeout=30 s   (315–345 s)
+Attempt #6  | delay=16 s  connect timeout=30 s   (361–391 s)
+Attempt #7  | delay=32 s  connect timeout=30 s   (423–453 s)
+Attempt #8  | delay=64 s  connect timeout=30 s   (517–547 s)
+Attempt #9+ | delay≈128 s (capped)               (beyond ~9 min if still offline)
+──────────────────────────────────────────────────────────────────────
+```
+
+Notes:
+- With clean sessions enabled (default), subscriptions are re‑issued on reconnect (both apps already do this in their connect handlers).
+- With persistent sessions (`clean_session: false`), the broker retains subscriptions and queued QoS 1/2 messages; both apps still safely resubscribe.
+- Under full blackhole conditions (no FIN/RST), detection depends on keepalive; expect `~1×KA` to send PINGREQ and up to `~1.5×KA` for disconnect at the broker side. Client‑side may trigger earlier if `ping_timeout_ms` elapses (Go) or Paho Java detects missing PINGRESPs.
 
 ## Operational Notes
 
