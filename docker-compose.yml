@@ -1,0 +1,112 @@
+services:
+  emqx1:
+    image: emqx/emqx:5.8
+    container_name: emqx1
+    restart: unless-stopped
+    environment:
+      - EMQX_NODE__NAME=emqx1@emqx1.mqttnet
+      - EMQX_NODE__COOKIE=cluster_secret
+      - EMQX_NODE__LONGNAME=true
+      - EMQX_CLUSTER__DISCOVERY_STRATEGY=static
+      - EMQX_CLUSTER__STATIC__SEEDS=emqx1@emqx1.mqttnet,emqx2@emqx2.mqttnet,emqx3@emqx3.mqttnet
+      - EMQX_LISTENERS__TCP__DEFAULT__BIND=0.0.0.0:1883
+      - EMQX_DASHBOARD__LISTENERS__HTTP__BIND=0.0.0.0:18083
+      - EMQX_DASHBOARD__DEFAULT_USERNAME=admin
+      - EMQX_DASHBOARD__DEFAULT_PASSWORD=public
+      - EMQX_ALLOW_ANONYMOUS=true
+    ports:
+      - "18083:18083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:18083 >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      mqttnet:
+        aliases:
+          - emqx1.mqttnet
+
+  emqx2:
+    image: emqx/emqx:5.8
+    container_name: emqx2
+    restart: unless-stopped
+    environment:
+      - EMQX_NODE__NAME=emqx2@emqx2.mqttnet
+      - EMQX_NODE__COOKIE=cluster_secret
+      - EMQX_NODE__LONGNAME=true
+      - EMQX_CLUSTER__DISCOVERY_STRATEGY=static
+      - EMQX_CLUSTER__STATIC__SEEDS=emqx1@emqx1.mqttnet,emqx2@emqx2.mqttnet,emqx3@emqx3.mqttnet
+      - EMQX_LISTENERS__TCP__DEFAULT__BIND=0.0.0.0:1883
+      - EMQX_ALLOW_ANONYMOUS=true
+    networks:
+      mqttnet:
+        aliases:
+          - emqx2.mqttnet
+
+  emqx3:
+    image: emqx/emqx:5.8
+    container_name: emqx3
+    restart: unless-stopped
+    environment:
+      - EMQX_NODE__NAME=emqx3@emqx3.mqttnet
+      - EMQX_NODE__COOKIE=cluster_secret
+      - EMQX_NODE__LONGNAME=true
+      - EMQX_CLUSTER__DISCOVERY_STRATEGY=static
+      - EMQX_CLUSTER__STATIC__SEEDS=emqx1@emqx1.mqttnet,emqx2@emqx2.mqttnet,emqx3@emqx3.mqttnet
+      - EMQX_LISTENERS__TCP__DEFAULT__BIND=0.0.0.0:1883
+      - EMQX_ALLOW_ANONYMOUS=true
+    networks:
+      mqttnet:
+        aliases:
+          - emqx3.mqttnet
+
+  mqtt-gateway:
+    image: haproxy:2.9-bullseye
+    container_name: mqtt-gateway
+    depends_on: [ emqx1, emqx2, emqx3 ]
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "1883:1883"
+    networks: [ mqttnet ]
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.5.0
+    container_name: toxiproxy
+    command: ["-host=0.0.0.0", "-port=8474", "-config=/config/config.json"]
+    restart: unless-stopped
+    ports:
+      - "8474:8474"     # HTTP API
+      - "18830:18830"   # MQTT proxy listen (created by init)
+    networks: [ mqttnet ]
+    volumes:
+      - ./toxiproxy/config.json:/config/config.json:ro
+
+  # toxiproxy-init no longer required; using static config above
+
+  go-backend:
+    build: ./go-backend
+    container_name: go-backend
+    depends_on: [ mqtt-gateway ]
+    volumes:
+      - ./configs/backend.yaml:/app/configs/backend.yaml:ro
+    environment:
+      - BACKEND_CONFIG=/app/configs/backend.yaml
+    ports:
+      - "6060:6060"   # pprof
+    networks: [ mqttnet ]
+
+  java-client:
+    build: ./java-client
+    container_name: java-client
+    depends_on: [ toxiproxy ]
+    volumes:
+      - ./configs/client.yaml:/app/configs/client.yaml:ro
+    environment:
+      - CLIENT_CONFIG=/app/configs/client.yaml
+    ports:
+      - "6061:6061"   # profiling HTTP
+    networks: [ mqttnet ]
+
+networks:
+  mqttnet: {}

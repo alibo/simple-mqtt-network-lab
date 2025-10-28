@@ -1,0 +1,45 @@
+mqtt:
+  host: mqtt-gateway
+  port: 1883
+  client_id: backend-1
+  keepalive_secs: 30
+  protocol_version: 3  # MQTT 3.1
+  clean_session: true  # whether to start a clean session (default)
+
+retry:
+  enabled: true
+  connect_timeout_ms: 5000
+  max_reconnect_interval_ms: 10000
+  ping_timeout_ms: 5000
+  write_timeout_ms: 5000
+
+## App-level ping/pong removed. Using MQTT keepalive (PINGREQ/PINGRESP).
+
+publish:
+  offer_every_ms: 1000
+  ride_every_ms: 2000
+
+qos:
+  location: 0
+  offer: 0
+  ride: 0
+
+payload_bytes:
+  offer: 4096
+  ride: 4096
+
+socket:
+  tcp_keepalive_secs: 60
+  tcp_nodelay: true
+  read_buffer: 262144
+  write_buffer: 262144
+
+buffer_inflight:
+  max_inflight: 64
+  buffer_enabled: true
+  buffer_size: 1000
+  drop_oldest: true
+  persist: false
+
+log:
+  debug: false

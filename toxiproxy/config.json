@@ -1,0 +1,8 @@
+[
+  {
+    "name": "mqtt",
+    "listen": "0.0.0.0:18830",
+    "upstream": "mqtt-gateway:1883",
+    "enabled": true
+  }
+]

@@ -1,0 +1,42 @@
+mqtt:
+  host: toxiproxy
+  port: 18830
+  client_id: java-1
+  keepalive_secs: 30
+  protocol_version: 3  # MQTT 3.1
+  clean_session: true  # whether to start a clean session (default)
+
+retry:
+  enabled: true
+  automatic_reconnect: true
+  connect_timeout_ms: 5000
+  max_reconnect_delay_ms: 10000
+
+## App-level ping/pong removed. Using MQTT keepalive (PINGREQ/PINGRESP).
+
+publish:
+  location_every_ms: 1000
+
+qos:
+  location: 0
+  offer: 0
+  ride: 0
+
+payload_bytes:
+  location: 4096
+
+socket:
+  tcp_keepalive: true
+  tcp_nodelay: true
+  receive_buffer: 262144
+  send_buffer: 262144
+
+buffer_inflight:
+  max_inflight: 64
+  buffer_enabled: true
+  buffer_size: 1000
+  drop_oldest: true
+  persist: false
+
+log:
+  debug: false

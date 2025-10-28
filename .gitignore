@@ -1,0 +1,40 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Go
+go-backend/bin/
+go-backend/coverage.out
+
+# Java/Gradle
+.gradle/
+java-client/.gradle/
+java-client/build/
+java-client/out/
+java-client/*.iml
+java-client/.classpath
+java-client/.project
+java-client/.settings/
+
+# JFR recordings
+*.jfr
+
+# Docker/misc
+*.pid
+*.tmp
+*.bak
