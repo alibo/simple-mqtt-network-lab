@@ -31,7 +31,7 @@ type Config struct {
         CleanSession    *bool  `yaml:"clean_session"`
     } `yaml:"mqtt"`
     Retry struct {
-        Enabled                bool `yaml:"enabled"`
+        Enabled                *bool `yaml:"enabled"`
         ConnectTimeoutMs       int  `yaml:"connect_timeout_ms"`
         MaxReconnectIntervalMs int  `yaml:"max_reconnect_interval_ms"`
         PingTimeoutMs          int  `yaml:"ping_timeout_ms"`
@@ -42,9 +42,9 @@ type Config struct {
         RideEveryMs  int `yaml:"ride_every_ms"`
     } `yaml:"publish"`
     QoS struct {
-        Location int `yaml:"location"`
-        Offer    int `yaml:"offer"`
-        Ride     int `yaml:"ride"`
+        Location *int `yaml:"location"`
+        Offer    *int `yaml:"offer"`
+        Ride     *int `yaml:"ride"`
     } `yaml:"qos"`
     PayloadBytes struct {
         Offer int `yaml:"offer"`
@@ -110,22 +110,29 @@ func loadConfig() (Config, error) {
     if c.Retry.WriteTimeoutMs == 0 {
         c.Retry.WriteTimeoutMs = 5000
     }
-    // Auto reconnect by default
-    c.Retry.Enabled = true
+    // Auto reconnect by default (respect explicit false)
+    if c.Retry.Enabled == nil {
+        v := true
+        c.Retry.Enabled = &v
+    }
     if c.Publish.OfferEveryMs == 0 {
         c.Publish.OfferEveryMs = 1000
     }
     if c.Publish.RideEveryMs == 0 {
         c.Publish.RideEveryMs = 2000
     }
-    if c.QoS.Location == 0 {
-        c.QoS.Location = 1
+    // QoS defaults: only if not specified (0 is a valid QoS)
+    if c.QoS.Location == nil {
+        v := 1
+        c.QoS.Location = &v
     }
-    if c.QoS.Offer == 0 {
-        c.QoS.Offer = 1
+    if c.QoS.Offer == nil {
+        v := 1
+        c.QoS.Offer = &v
     }
-    if c.QoS.Ride == 0 {
-        c.QoS.Ride = 1
+    if c.QoS.Ride == nil {
+        v := 1
+        c.QoS.Ride = &v
     }
     if c.PayloadBytes.Offer == 0 {
         c.PayloadBytes.Offer = 100
@@ -243,7 +250,7 @@ func main() {
     clean := true
     if cfg.MQTT.CleanSession != nil { clean = *cfg.MQTT.CleanSession }
     opts.SetCleanSession(clean)
-    opts.SetAutoReconnect(cfg.Retry.Enabled)
+    opts.SetAutoReconnect(*cfg.Retry.Enabled)
     opts.SetKeepAlive(time.Duration(cfg.MQTT.KeepAliveSecs) * time.Second)
     if cfg.Retry.PingTimeoutMs > 0 {
         opts.SetPingTimeout(time.Duration(cfg.Retry.PingTimeoutMs) * time.Millisecond)
@@ -283,7 +290,7 @@ func main() {
     opts.SetOnConnectHandler(func(c mqtt.Client) {
         log.Printf("backend: %s connected to %s", tag("connect", colBlue), broker)
         // Subscriptions
-        if t := c.Subscribe("/driver/location", byte(cfg.QoS.Location), func(_ mqtt.Client, m mqtt.Message) {
+        if t := c.Subscribe("/driver/location", byte(*cfg.QoS.Location), func(_ mqtt.Client, m mqtt.Message) {
             atomic.AddInt64(&cnt.received, 1)
             atomic.AddInt64(&cnt.recvLocation, 1)
             seq := parseSeq(m.Payload())
@@ -375,7 +382,7 @@ func main() {
             case <-offerTicker.C:
                 if client.IsConnectionOpen() {
                     s := offerSeq.Add(1)
-                    publish("/driver/offer", byte(cfg.QoS.Offer), cfg.PayloadBytes.Offer, s)
+                    publish("/driver/offer", byte(*cfg.QoS.Offer), cfg.PayloadBytes.Offer, s)
                 }
             case <-ctx.Done():
                 return
@@ -389,7 +396,7 @@ func main() {
             case <-rideTicker.C:
                 if client.IsConnectionOpen() {
                     s := rideSeq.Add(1)
-                    publish("/driver/ride", byte(cfg.QoS.Ride), cfg.PayloadBytes.Ride, s)
+                    publish("/driver/ride", byte(*cfg.QoS.Ride), cfg.PayloadBytes.Ride, s)
                 }
             case <-ctx.Done():
                 return

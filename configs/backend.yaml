@@ -4,7 +4,7 @@ mqtt:
   client_id: backend-1
   keepalive_secs: 30
   protocol_version: 3  # MQTT 3.1
-  clean_session: true  # whether to start a clean session (default)
+  clean_session: false  # whether to start a clean session (default)
 
 retry:
   enabled: true
@@ -21,7 +21,7 @@ publish:
 
 qos:
   location: 0
-  offer: 0
+  offer: 1
   ride: 0
 
 payload_bytes:

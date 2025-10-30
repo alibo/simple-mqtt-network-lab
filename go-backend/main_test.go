@@ -88,6 +88,36 @@ log:
     }
 }
 
+func TestLoadConfig_QoSZeroAndRetryEnabledFalse(t *testing.T) {
+    cfgPath := writeTempConfig(t, `mqtt:
+  host: a
+  port: 1111
+retry:
+  enabled: false
+qos:
+  location: 0
+  offer: 1
+  ride: 0
+`)
+    t.Setenv("BACKEND_CONFIG", cfgPath)
+    cfg, err := loadConfig()
+    if err != nil {
+        t.Fatalf("loadConfig error: %v", err)
+    }
+    if cfg.Retry.Enabled == nil || *cfg.Retry.Enabled != false {
+        t.Fatalf("expected retry.enabled=false to be preserved, got %+v", cfg.Retry.Enabled)
+    }
+    if cfg.QoS.Location == nil || *cfg.QoS.Location != 0 {
+        t.Fatalf("expected qos.location=0 to be preserved, got %+v", cfg.QoS.Location)
+    }
+    if cfg.QoS.Offer == nil || *cfg.QoS.Offer != 1 {
+        t.Fatalf("expected qos.offer=1, got %+v", cfg.QoS.Offer)
+    }
+    if cfg.QoS.Ride == nil || *cfg.QoS.Ride != 0 {
+        t.Fatalf("expected qos.ride=0 to be preserved, got %+v", cfg.QoS.Ride)
+    }
+}
+
 // Integration test: requires TEST_MQTT_BROKER (e.g., tcp://localhost:1883)
 func TestMQTTIntegration(t *testing.T) {
     broker := os.Getenv("TEST_MQTT_BROKER")
@@ -114,4 +144,3 @@ func TestMQTTIntegration(t *testing.T) {
         t.Fatal("did not receive published message")
     }
 }
-
