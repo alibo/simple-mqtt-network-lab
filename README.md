@@ -295,11 +295,15 @@ Examples:
 - 120ms delay with 40ms jitter: `bash scripts/netem.sh delay 120 40`
 - 5% packet loss: `bash scripts/netem.sh loss 5`
 - Combine delay+loss: `bash scripts/netem.sh shape 120 20 2 10`
+- Egress bandwidth limit: `bash scripts/netem.sh rate 512kbps` (accepts `kbps|mbps` or `kbit|mbit`)
+- Combine all (with bandwidth): `bash scripts/netem.sh shape 120 20 2 10 1mbps`
 - Clear NetEm: `bash scripts/netem.sh clear`
 
 Notes:
 - This is real packet impairment below TCP, unlike Toxiproxy's slicer toxic which only fragments streams.
 - Requires NET_ADMIN capability; the `network-troubleshooting` container has it by default.
+- Bandwidth limiting uses a TBF child qdisc under the `netem` root and shapes egress on the target interface. It typically affects both directions of proxied flows since traffic in each direction egresses that interface.
+- You can override TBF tuning via env: `TBF_BURST` (default `32kbit`) and `TBF_LATENCY` (default `400ms`).
 
 ## Troubleshooting Container (netshoot)
 
