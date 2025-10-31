@@ -203,6 +203,25 @@ func parseSeq(b []byte) int64 {
     return n
 }
 
+// parseTs extracts the unix millis from payload prefix ts=<ms>| ...
+func parseTs(b []byte) int64 {
+    s := string(b)
+    i := strings.Index(s, "ts=")
+    if i < 0 { return -1 }
+    i += 3 // skip "ts="
+    if i >= len(s) { return -1 }
+    j := strings.IndexByte(s[i:], '|')
+    if j < 0 { return -1 }
+    j += i
+    var n int64
+    for k := i; k < j; k++ {
+        c := s[k]
+        if c < '0' || c > '9' { return -1 }
+        n = n*10 + int64(c-'0')
+    }
+    return n
+}
+
 func main() {
     cfg, err := loadConfig()
     if err != nil {
@@ -294,7 +313,11 @@ func main() {
             atomic.AddInt64(&cnt.received, 1)
             atomic.AddInt64(&cnt.recvLocation, 1)
             seq := parseSeq(m.Payload())
-            log.Printf("backend: %s topic=%s seq=%d qos=%d bytes=%d", tag("recv", colGreen), m.Topic(), seq, m.Qos(), len(m.Payload()))
+            pubTs := parseTs(m.Payload())
+            recvTs := time.Now().UnixMilli()
+            lat := int64(-1)
+            if pubTs > 0 && recvTs >= pubTs { lat = recvTs - pubTs }
+            log.Printf("backend: %s topic=%s seq=%d qos=%d bytes=%d latency_ms=%d pub_ts_ms=%d recv_ts_ms=%d", tag("recv", colGreen), m.Topic(), seq, m.Qos(), len(m.Payload()), lat, pubTs, recvTs)
         }); !t.WaitTimeout(5*time.Second) || t.Error() != nil {
             log.Printf("backend: %s subscribe /driver/location err=%v", tag("error", colRed), t.Error())
         } else {
@@ -324,7 +347,7 @@ func main() {
         payload := make([]byte, len(prefix)+pad)
         copy(payload, []byte(prefix))
         for i := 0; i < pad; i++ { payload[len(prefix)+i] = 'x' }
-        log.Printf("backend: %s topic=%s seq=%d bytes=%d", tag("publish", colMagenta), topic, seq, len(payload))
+        log.Printf("backend: %s topic=%s seq=%d bytes=%d pub_ts_ms=%d", tag("publish", colMagenta), topic, seq, len(payload), ts)
         t := client.Publish(topic, qos, false, payload)
         go func(tok mqtt.Token, topic string) {
             if !tok.WaitTimeout(10 * time.Second) {

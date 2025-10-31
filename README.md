@@ -305,6 +305,46 @@ Notes:
 - Bandwidth limiting uses a TBF child qdisc under the `netem` root and shapes egress on the target interface. It typically affects both directions of proxied flows since traffic in each direction egresses that interface.
 - You can override TBF tuning via env: `TBF_BURST` (default `32kbit`) and `TBF_LATENCY` (default `400ms`).
 
+## Latency Charts (Per Topic)
+
+Both apps embed `ts=<unix_ms>|seq=<n>|` at the start of payloads. Receivers log per‑message latency as `latency_ms = recv_ts_ms − pub_ts_ms` with sequence. Use the helper to capture a time window and generate CSVs + a PNG‑based HTML report.
+
+Requirements:
+- Python 3
+- gnuplot (for charts)
+  - macOS: `brew install gnuplot`
+  - Ubuntu/Debian: `sudo apt-get update && sudo apt-get install -y gnuplot`
+  - Fedora: `sudo dnf install -y gnuplot`
+  - CentOS/RHEL: `sudo yum install -y gnuplot`
+  - Arch: `sudo pacman -S gnuplot`
+  - Alpine: `sudo apk add gnuplot`
+
+Helper script:
+- `bash scripts/latency-report.sh [--pre N] [--post N] [--] [command ...]`
+
+Examples:
+- Capture 5s before and 10s after a netem change:
+  `bash scripts/latency-report.sh --pre 5 --post 10 -- bash scripts/netem.sh shape 120 20 2 10 1mbps`
+- Capture around a toxiproxy latency change:
+  `bash scripts/latency-report.sh --pre 5 --post 10 -- bash scripts/mqtt-proxy.sh latency 120 40 both`
+
+Outputs (under `captures/latency-<ts>/`):
+- `latency_offer.csv`, `latency_ride.csv`, `latency_location.csv` with columns: `seq,latency_ms,pub_ts_ms,recv_ts_ms`.
+- Missing publishes (not received within window): `latency_offer_missing.csv`, `latency_ride_missing.csv`, `latency_location_missing.csv` (seq, pub_ts_ms).
+- Per-second delivery rate CSV per topic: `rate_<topic>.csv` with columns `second_unix,published,received,delivered_ratio`.
+- Summary files: `summary.json` and `summary.txt` with totals, delivered ratio, and latency stats (min/mean/p50/p95/p99/max) per topic.
+- HTML report: `index.html` summarizes stats and embeds generated PNG charts; requires `gnuplot` to render charts.
+
+Notes:
+- The script uses `docker logs --since/--until` to bound the time window. Adjust `--pre`/`--post` to include exactly the period you care about.
+- Open `index.html` to see: latency line charts, missing markers (red), publish vs receive rates, and delivered ratios. Click any image to expand it (full‑screen lightbox). If charts are missing, install `gnuplot` and rerun the report.
+
+What the charts mean:
+- Latency vs Seq: per‑message latency for received messages; x‑axis is published sequence.
+- Latency + Missing: same latency line plus red markers at y=0 for publishes with no receive inside the window.
+- Published vs Received per Second: published counts grouped by publish second; received counts by receive second (time on x‑axis).
+- Delivered Ratio per Pub‑Second: for each publish second, delivered/published ∈ [0,1].
+
 ## Troubleshooting Container (netshoot)
 
 A persistent `nicolaka/netshoot` container named `network-troubleshooting` shares the network namespace with Toxiproxy for deep inspection.

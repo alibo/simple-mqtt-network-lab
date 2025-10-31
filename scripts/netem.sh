@@ -122,7 +122,25 @@ status() {
 clear_qdisc() {
   ensure_target_running
   echo "[netem] clearing qdisc on ${TARGET}:${IFACE}"
-  run_tc "tc qdisc del dev ${IFACE} root || true; tc qdisc show dev ${IFACE}"
+  # Only attempt delete if root is netem; avoid noisy errors on 'noqueue 0:'
+  run_tc '
+set -e
+ROOT_LINE=$(tc qdisc show dev '"${IFACE}"' | head -n1 || true)
+echo "[netem] current root: ${ROOT_LINE}"
+case "${ROOT_LINE}" in
+  *netem*|*"handle 1: netem"*)
+    tc qdisc del dev '"${IFACE}"' root || true
+    echo "[netem] removed netem from root"
+    ;;
+  *noqueue*|*" 0: root"*)
+    echo "[netem] root qdisc is noqueue; nothing to clear"
+    ;;
+  *)
+    echo "[netem] root qdisc not netem; nothing to clear"
+    ;;
+esac
+tc qdisc show dev '"${IFACE}"'
+'
 }
 
 # Normalize a user-provided rate into a tc-compatible unit string
@@ -168,7 +186,10 @@ set_rate() {
   latency=${TBF_LATENCY:-400ms}
   echo "[netem] rate limit ${rate} (burst ${burst}, latency ${latency}) on ${TARGET}:${IFACE}"
   ensure_root_netem_handle
-  run_tc "tc qdisc replace dev ${IFACE} parent 1: handle 10: tbf rate ${rate} burst ${burst} latency ${latency}"
+  # Be robust across tc/iproute2 variants: try change → add → delete+add
+  run_tc "tc qdisc change dev ${IFACE} parent 1: handle 10: tbf rate ${rate} burst ${burst} latency ${latency} 2>/dev/null || \
+          tc qdisc add dev ${IFACE} parent 1: handle 10: tbf rate ${rate} burst ${burst} latency ${latency} 2>/dev/null || \
+          ( tc qdisc del dev ${IFACE} handle 10: 2>/dev/null; tc qdisc add dev ${IFACE} parent 1: handle 10: tbf rate ${rate} burst ${burst} latency ${latency} )"
 }
 
 set_delay() {

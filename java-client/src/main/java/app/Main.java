@@ -170,9 +170,12 @@ public class Main {
             @Override public void connectionLost(Throwable cause) { logf("%s cause=%s", tag("disconnect", COL_YELLOW), String.valueOf(cause)); }
             @Override public void messageArrived(String topic, MqttMessage message) {
                 long seq = parseSeq(message.getPayload());
+                long pubTs = parseTs(message.getPayload());
+                long recvTs = System.currentTimeMillis();
+                long lat = (pubTs > 0 && recvTs >= pubTs) ? (recvTs - pubTs) : -1;
                 if ("/driver/offer".equals(topic)) recvOffer.incrementAndGet();
                 else if ("/driver/ride".equals(topic)) recvRide.incrementAndGet();
-                logf("%s topic=%s seq=%d qos=%d bytes=%d", tag("recv", COL_GREEN), topic, seq, message.getQos(), message.getPayload().length);
+                logf("%s topic=%s seq=%d qos=%d bytes=%d latency_ms=%d pub_ts_ms=%d recv_ts_ms=%d", tag("recv", COL_GREEN), topic, seq, message.getQos(), message.getPayload().length, lat, pubTs, recvTs);
             }
             @Override public void deliveryComplete(IMqttDeliveryToken token) { /* acked logged via stats */ }
         });
@@ -204,7 +207,7 @@ public class Main {
                 int size = Math.max(0, cfg.payloadLocation - prefix.length());
                 String body = prefix + "x".repeat(size);
                 byte[] payload = body.getBytes(StandardCharsets.UTF_8);
-                logf("%s topic=/driver/location seq=%d bytes=%d", tag("publish", COL_MAGENTA), s, payload.length);
+                logf("%s topic=/driver/location seq=%d bytes=%d pub_ts_ms=%d", tag("publish", COL_MAGENTA), s, payload.length, System.currentTimeMillis());
                 cli.publish("/driver/location", payload, cfg.qosLocation, false, null, new IMqttActionListener() {
                     @Override public void onSuccess(IMqttToken asyncActionToken) { acked[0]++; }
                     @Override public void onFailure(IMqttToken asyncActionToken, Throwable exception) { logf("publish error: %s", exception); }
@@ -248,6 +251,15 @@ public class Main {
             String s = new String(payload, StandardCharsets.UTF_8);
             int i = s.indexOf("seq="); if (i < 0) return -1;
             i += 4; int j = s.indexOf('|', i); if (j < 0) return -1;
+            return Long.parseLong(s.substring(i, j));
+        } catch (Exception ignored) { return -1; }
+    }
+
+    private static long parseTs(byte[] payload){
+        try {
+            String s = new String(payload, StandardCharsets.UTF_8);
+            int i = s.indexOf("ts="); if (i < 0) return -1;
+            i += 3; int j = s.indexOf('|', i); if (j < 0) return -1;
             return Long.parseLong(s.substring(i, j));
         } catch (Exception ignored) { return -1; }
     }

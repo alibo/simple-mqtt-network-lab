@@ -38,3 +38,7 @@ java-client/.settings/
 *.pid
 *.tmp
 *.bak
+
+# Lab artifacts
+captures/
+tmp/
