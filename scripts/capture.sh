@@ -27,6 +27,7 @@ Commands:
   filter "<expr>" [seconds] [outfile.pcap]
                                   Capture with tcpdump filter for N seconds (default 30)
   live ["<expr>"]                 Live interactive capture (Ctrl+C to stop)
+  live-wireshark ["<expr>"]       Stream live capture into Wireshark via named pipe
   list                            List /tmp/*.pcap in helper
   copy <file.pcap> [dest_dir]     Copy pcap from helper to host (default ./)
   clear                           Remove saved pcaps from helper (/tmp/*.pcap)
@@ -130,6 +131,39 @@ copy_cmd() {
   echo "[capture] copied to ${dest}/$file"
 }
 
+live_wireshark_cmd() {
+  local expr=${1:-"port ${PORT}"}
+  ensure_exec_running
+  local fifo=${FIFO:-/tmp/mqtt.pipe}
+  # Create named pipe if needed
+  if [[ -e "$fifo" && ! -p "$fifo" ]]; then
+    rm -f "$fifo"
+  fi
+  if [[ ! -p "$fifo" ]]; then
+    mkfifo "$fifo"
+  fi
+  echo "[capture] starting tcpdump producer (expr=[$expr]) → $fifo"
+  docker exec -e EXPR="$expr" -e IFACE="$IFACE" "$EXEC_CONTAINER" sh -lc 'tcpdump -i "$IFACE" -U -s 0 -w - $EXPR' > "$fifo" &
+  local prod_pid=$!
+  trap 'kill $prod_pid 2>/dev/null || true; rm -f "$fifo"' INT TERM EXIT
+  echo "[capture] launching Wireshark. Close Wireshark to stop."
+  if command -v wireshark >/dev/null 2>&1; then
+    wireshark -k -i "$fifo" || true
+  elif [[ "$(uname -s)" == "Darwin" && -x "/Applications/Wireshark.app/Contents/MacOS/Wireshark" ]]; then
+    "/Applications/Wireshark.app/Contents/MacOS/Wireshark" -k -i "$fifo" || open -a Wireshark --args -k -i "$fifo" || true
+  else
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      open -a Wireshark --args -k -i "$fifo" || true
+    else
+      echo "[capture] wireshark not found in PATH. Please install Wireshark or adjust PATH." >&2
+    fi
+  fi
+  echo "[capture] waiting for tcpdump producer to exit…"
+  wait $prod_pid 2>/dev/null || true
+  rm -f "$fifo"
+  trap - INT TERM EXIT
+}
+
 cmd=${1:-}
 case "$cmd" in
   status) status_cmd ;;
@@ -138,8 +172,8 @@ case "$cmd" in
   port) shift; port_cmd "${1:-30}" "${2:-}" ;;
   filter) shift; filter_cmd "${1:-}" "${2:-30}" "${3:-}" ;;
   live) shift; live_cmd "${1:-}" ;;
+  live-wireshark) shift; live_wireshark_cmd "${1:-}" ;;
   copy) shift; copy_cmd "${1:-}" "${2:-.}" ;;
   ""|-h|--help|help) usage ;;
   *) echo "unknown command: $cmd"; usage; exit 1 ;;
 esac
-

@@ -314,10 +314,61 @@ Helper script for capture: `bash scripts/capture.sh`
 - Save MQTT proxy traffic 60s to /tmp/mqtt-proxy.pcap: `bash scripts/capture.sh port 60 mqtt-proxy.pcap`
 - Save custom filter 30s: `bash scripts/capture.sh filter "host mqtt-gateway" 30 gw.pcap`
 - Live sniff (Ctrl+C to stop): `bash scripts/capture.sh live "port 18830"`
+- Live to Wireshark via named pipe: `bash scripts/capture.sh live-wireshark "port 18830 or (host mqtt-gateway and port 1883)"`
 - List saved pcaps: `bash scripts/capture.sh list`
 - Copy to host: `bash scripts/capture.sh copy mqtt-proxy.pcap ./captures`
 
 Design choices: Toxiproxy toxics simulate stream conditions (latency, bandwidth, half‑open, fragmentation). For realistic packet loss/reordering/corruption, prefer NetEm.
+
+### Live Capture with Wireshark (from host)
+
+You can stream packets from the netshoot helper into Wireshark running on your host.
+
+Option A — direct pipe (Linux):
+
+```bash
+docker exec network-troubleshooting \
+  tcpdump -i eth0 -U -s 0 -w - \
+  'port 18830 or (host mqtt-gateway and port 1883)' | \
+  wireshark -k -i -
+```
+
+Option B — named pipe (Linux/macOS):
+
+Terminal 1 (producer):
+
+```bash
+mkfifo /tmp/mqtt.pipe
+docker exec network-troubleshooting \
+  tcpdump -i eth0 -U -s 0 -w - \
+  'port 18830 or (host mqtt-gateway and port 1883)' > /tmp/mqtt.pipe
+```
+
+Terminal 2 (Wireshark):
+
+- Linux:
+  ```bash
+  wireshark -k -i /tmp/mqtt.pipe
+  ```
+- macOS:
+  ```bash
+  open -a Wireshark --args -k -i /tmp/mqtt.pipe
+  ```
+
+Tips:
+- Use display filter `mqtt` or decode ports as MQTT: Analyze → Decode As… → select TCP port 18830/1883 → MQTT.
+- `-U` (unbuffered) and `-s 0` ensure low-latency, full-packet capture.
+- On Docker Desktop (macOS/Windows), capturing on host interfaces won’t see container traffic; the netshoot approach avoids that by sharing toxiproxy’s network namespace.
+
+Shortcut: use the helper to set up the FIFO and launch Wireshark for you
+
+```bash
+bash scripts/capture.sh live-wireshark "port 18830 or (host mqtt-gateway and port 1883)"
+```
+
+Notes:
+- The helper creates a FIFO at `/tmp/mqtt.pipe` (override with `FIFO=/path`), starts tcpdump inside `network-troubleshooting`, and launches Wireshark on the host.
+- Close Wireshark to stop capture; the helper cleans up the background tcpdump and removes the FIFO.
 
 ## Operational Notes
 
