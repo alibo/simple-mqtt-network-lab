@@ -313,10 +313,21 @@ A persistent `nicolaka/netshoot` container named `network-troubleshooting` share
 Helper script for capture: `bash scripts/capture.sh`
 - Save MQTT proxy traffic 60s to /tmp/mqtt-proxy.pcap: `bash scripts/capture.sh port 60 mqtt-proxy.pcap`
 - Save custom filter 30s: `bash scripts/capture.sh filter "host mqtt-gateway" 30 gw.pcap`
-- Live sniff (Ctrl+C to stop): `bash scripts/capture.sh live "port 18830"`
-- Live to Wireshark via named pipe: `bash scripts/capture.sh live-wireshark "port 18830 or (host mqtt-gateway and port 1883)"`
+ - Live sniff (Ctrl+C to stop): `bash scripts/capture.sh live` (defaults to both directions)
+- Live to Wireshark via named pipe: `bash scripts/capture.sh live-wireshark` (defaults to both directions and auto-decodes MQTT)
 - List saved pcaps: `bash scripts/capture.sh list`
 - Copy to host: `bash scripts/capture.sh copy mqtt-proxy.pcap ./captures`
+
+Preset filters (aliases):
+- List presets: `bash scripts/capture.sh presets`
+- Capture with preset (30s default): `bash scripts/capture.sh preset cp 60 cp.pcap`
+- Live with preset: `bash scripts/capture.sh live-preset both`
+- Live Wireshark with preset: `bash scripts/capture.sh live-wireshark-preset pg`
+
+Preset names:
+- `cp` (client↔proxy): `port 18830`
+- `pg` (proxy↔gateway): `host mqtt-gateway and port 1883`
+- `both` (cp or pg): `port 18830 or (host mqtt-gateway and port 1883)`
 
 Design choices: Toxiproxy toxics simulate stream conditions (latency, bandwidth, half‑open, fragmentation). For realistic packet loss/reordering/corruption, prefer NetEm.
 
@@ -360,14 +371,15 @@ Tips:
 - `-U` (unbuffered) and `-s 0` ensure low-latency, full-packet capture.
 - On Docker Desktop (macOS/Windows), capturing on host interfaces won’t see container traffic; the netshoot approach avoids that by sharing toxiproxy’s network namespace.
 
-Shortcut: use the helper to set up the FIFO and launch Wireshark for you
+Shortcut: use the helper to set up the FIFO and launch Wireshark (defaults to both directions and sets MQTT decode)
 
 ```bash
-bash scripts/capture.sh live-wireshark "port 18830 or (host mqtt-gateway and port 1883)"
+bash scripts/capture.sh live-wireshark
 ```
 
 Notes:
 - The helper creates a FIFO at `/tmp/mqtt.pipe` (override with `FIFO=/path`), starts tcpdump inside `network-troubleshooting`, and launches Wireshark on the host.
+- It also hints Wireshark to decode TCP ports 18830 and 1883 as MQTT via `-d tcp.port==18830,mqtt` and `-d tcp.port==1883,mqtt`.
 - Close Wireshark to stop capture; the helper cleans up the background tcpdump and removes the FIFO.
 
 ## Operational Notes

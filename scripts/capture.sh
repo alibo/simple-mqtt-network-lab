@@ -26,8 +26,12 @@ Commands:
   port [seconds] [outfile.pcap]   Capture TCP ${PORT} for N seconds (default 30) to /tmp/<file>
   filter "<expr>" [seconds] [outfile.pcap]
                                   Capture with tcpdump filter for N seconds (default 30)
-  live ["<expr>"]                 Live interactive capture (Ctrl+C to stop)
-  live-wireshark ["<expr>"]       Stream live capture into Wireshark via named pipe
+  live ["<expr>"]                 Live interactive capture (Ctrl+C to stop). Default filter: both
+  live-wireshark ["<expr>"]       Stream live capture into Wireshark via named pipe (default filter: both)
+  presets                         List preset filter aliases
+  preset <name> [sec] [outfile]   Capture using a preset alias (cp|pg|both)
+  live-preset <name>              Live capture using a preset alias
+  live-wireshark-preset <name>    Live Wireshark using a preset alias
   list                            List /tmp/*.pcap in helper
   copy <file.pcap> [dest_dir]     Copy pcap from helper to host (default ./)
   clear                           Remove saved pcaps from helper (/tmp/*.pcap)
@@ -52,6 +56,31 @@ ensure_exec_running() {
 }
 
 ts() { date +%Y%m%d-%H%M%S; }
+
+# Preset filters relative to toxiproxy vantage point
+#  - cp   (client↔proxy):           port ${PORT}
+#  - pg   (proxy↔gateway):          host mqtt-gateway and port 1883
+#  - both (client↔proxy + ↔gateway): port ${PORT} or (host mqtt-gateway and port 1883)
+preset_expr() {
+  local name=$(echo "$1" | tr 'A-Z' 'a-z')
+  case "$name" in
+    cp|client-proxy|client|proxy-port|proxy) echo "port ${PORT}" ;;
+    pg|proxy-gateway|gateway) echo "host mqtt-gateway and port 1883" ;;
+    both|e2e|end-to-end|all) echo "port ${PORT} or (host mqtt-gateway and port 1883)" ;;
+    *) return 1 ;;
+  esac
+}
+
+presets_cmd() {
+  cat <<EOF
+[presets]
+  cp   | client-proxy     : port ${PORT}
+  pg   | proxy-gateway    : host mqtt-gateway and port 1883
+  both | e2e | end-to-end : port ${PORT} or (host mqtt-gateway and port 1883)
+
+Note: Capturing from toxiproxy's netns cannot see gateway↔EMQX traffic.
+EOF
+}
 
 status_cmd() {
   ensure_exec_running
@@ -111,15 +140,12 @@ filter_cmd() {
 }
 
 live_cmd() {
-  local expr=${1:-}
+  local default_expr
+  default_expr=$(preset_expr both)
+  local expr=${1:-"$default_expr"}
   ensure_exec_running
-  if [[ -z "$expr" ]]; then
-    echo "[capture] live on $IFACE (no filter). Ctrl+C to stop."
-    docker exec -it "$EXEC_CONTAINER" tcpdump -i "$IFACE" -n -vv
-  else
-    echo "[capture] live on $IFACE filter=[$expr]. Ctrl+C to stop."
-    docker exec -it -e EXPR="$expr" "$EXEC_CONTAINER" sh -lc 'tcpdump -i "$IFACE" -n -vv $EXPR'
-  fi
+  echo "[capture] live on $IFACE filter=[$expr]. Ctrl+C to stop."
+  docker exec -it -e EXPR="$expr" "$EXEC_CONTAINER" sh -lc 'tcpdump -i "$IFACE" -n -vv $EXPR'
 }
 
 copy_cmd() {
@@ -132,7 +158,9 @@ copy_cmd() {
 }
 
 live_wireshark_cmd() {
-  local expr=${1:-"port ${PORT}"}
+  local default_expr
+  default_expr=$(preset_expr both)
+  local expr=${1:-"$default_expr"}
   ensure_exec_running
   local fifo=${FIFO:-/tmp/mqtt.pipe}
   # Create named pipe if needed
@@ -145,15 +173,15 @@ live_wireshark_cmd() {
   echo "[capture] starting tcpdump producer (expr=[$expr]) → $fifo"
   docker exec -e EXPR="$expr" -e IFACE="$IFACE" "$EXEC_CONTAINER" sh -lc 'tcpdump -i "$IFACE" -U -s 0 -w - $EXPR' > "$fifo" &
   local prod_pid=$!
-  trap 'kill $prod_pid 2>/dev/null || true; rm -f "$fifo"' INT TERM EXIT
+  trap "kill $prod_pid 2>/dev/null || true; rm -f \"$fifo\"" INT TERM EXIT
   echo "[capture] launching Wireshark. Close Wireshark to stop."
   if command -v wireshark >/dev/null 2>&1; then
-    wireshark -k -i "$fifo" || true
+    wireshark -k -i "$fifo" -d tcp.port==${PORT},mqtt -d tcp.port==1883,mqtt || true
   elif [[ "$(uname -s)" == "Darwin" && -x "/Applications/Wireshark.app/Contents/MacOS/Wireshark" ]]; then
-    "/Applications/Wireshark.app/Contents/MacOS/Wireshark" -k -i "$fifo" || open -a Wireshark --args -k -i "$fifo" || true
+    "/Applications/Wireshark.app/Contents/MacOS/Wireshark" -k -i "$fifo" -d tcp.port==${PORT},mqtt -d tcp.port==1883,mqtt || open -a Wireshark --args -k -i "$fifo" -d tcp.port==${PORT},mqtt -d tcp.port==1883,mqtt || true
   else
     if [[ "$(uname -s)" == "Darwin" ]]; then
-      open -a Wireshark --args -k -i "$fifo" || true
+      open -a Wireshark --args -k -i "$fifo" -d tcp.port==${PORT},mqtt -d tcp.port==1883,mqtt || true
     else
       echo "[capture] wireshark not found in PATH. Please install Wireshark or adjust PATH." >&2
     fi
@@ -162,6 +190,35 @@ live_wireshark_cmd() {
   wait $prod_pid 2>/dev/null || true
   rm -f "$fifo"
   trap - INT TERM EXIT
+}
+
+preset_cmd() {
+  local name=${1:?preset name required}
+  local expr
+  if ! expr=$(preset_expr "$name"); then
+    echo "unknown preset: $name" >&2; presets_cmd; exit 1
+  fi
+  local secs=${2:-30}
+  local outfile=${3:-"capture-${name}-$(ts).pcap"}
+  filter_cmd "$expr" "$secs" "$outfile"
+}
+
+live_preset_cmd() {
+  local name=${1:?preset name required}
+  local expr
+  if ! expr=$(preset_expr "$name"); then
+    echo "unknown preset: $name" >&2; presets_cmd; exit 1
+  fi
+  live_cmd "$expr"
+}
+
+live_wireshark_preset_cmd() {
+  local name=${1:?preset name required}
+  local expr
+  if ! expr=$(preset_expr "$name"); then
+    echo "unknown preset: $name" >&2; presets_cmd; exit 1
+  fi
+  live_wireshark_cmd "$expr"
 }
 
 cmd=${1:-}
@@ -173,6 +230,10 @@ case "$cmd" in
   filter) shift; filter_cmd "${1:-}" "${2:-30}" "${3:-}" ;;
   live) shift; live_cmd "${1:-}" ;;
   live-wireshark) shift; live_wireshark_cmd "${1:-}" ;;
+  presets) presets_cmd ;;
+  preset) shift; preset_cmd "${1:-}" "${2:-30}" "${3:-}" ;;
+  live-preset) shift; live_preset_cmd "${1:-}" ;;
+  live-wireshark-preset) shift; live_wireshark_preset_cmd "${1:-}" ;;
   copy) shift; copy_cmd "${1:-}" "${2:-.}" ;;
   ""|-h|--help|help) usage ;;
   *) echo "unknown command: $cmd"; usage; exit 1 ;;
