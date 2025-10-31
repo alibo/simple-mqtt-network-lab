@@ -16,7 +16,7 @@ All app images use Debian slim bases. No Prometheus, no Grafana, no Streamlit UI
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Toxiproxy Usage (Impairments)](#toxiproxy-usage-impairments)
-  - [OS-level Impairments with tc netem](#os-level-impairments-with-tc-netem)
+- [Network Impairments (tc NetEm)](#network-impairments-tc-netem)
 - [Latency Charts (Per Topic)](#latency-charts-per-topic)
 - [Profiling](#profiling)
 - [MQTT Gateway & EMQX](#mqtt-gateway--emqx)
@@ -207,9 +207,20 @@ curl -s -X POST http://localhost:8474/proxies/mqtt/toxics \
 curl -s -X DELETE http://localhost:8474/proxies/mqtt/toxics/timeout5s
 ```
 
-Note: Toxiproxy 2.5 treats `enabled` as read-only via the REST API; use toxics (above) or delete/recreate the proxy instead.
+Note: Toxiproxy 2.5 treats `enabled` as read-only via the REST API; use toxics (above) or delete/recreate the proxy instead. For OS‑level packet impairments, see the dedicated section: [Network Impairments (tc NetEm)](#network-impairments-tc-netem).
 
-### OS-level Impairments with tc netem
+### Half‑Open Simulation
+
+- `halfdown` adds a downstream `limit_data` toxic with `bytes=0`, effectively blackholing server→client. The client keeps sending (e.g., PINGREQ, publishes) but never receives responses (PINGRESP, PUBACK). No FIN/RST is sent; the server still sees client traffic until keepalive/app timeouts.
+- `halfup` adds an upstream `limit_data` toxic with `bytes=0`, blackholing client→server. The socket stays open but the server won’t see client packets.
+- Use `up` to remove `halfdown`, `halfup`, `timeout`, and `down` toxics.
+
+### Full Blackhole (Both Directions)
+
+- `blackhole [ms]` adds a downstream `timeout_down` and upstream `timeout_up` toxic. With a large timeout (default ~1 year), both directions are blocked without FIN/RST so both ends think the connection is alive until their keepalive or app timeouts fire.
+- Use `up` to remove `timeout_down`/`timeout_up`.
+
+## Network Impairments (tc NetEm)
 
 For true per‑packet loss/jitter/latency at the OS level, use the NetEm helper. It applies `tc netem` in the Toxiproxy network namespace so all proxied MQTT traffic is affected.
 
@@ -231,16 +242,49 @@ Notes:
 - Bandwidth limiting uses a TBF child qdisc under the `netem` root and shapes egress on the target interface. It typically affects both directions of proxied flows since traffic in each direction egresses that interface.
 - You can override TBF tuning via env: `TBF_BURST` (default `32kbit`) and `TBF_LATENCY` (default `400ms`).
 
-### Half‑Open Simulation
+## Latency Charts (Per Topic)
 
-- `halfdown` adds a downstream `limit_data` toxic with `bytes=0`, effectively blackholing server→client. The client keeps sending (e.g., PINGREQ, publishes) but never receives responses (PINGRESP, PUBACK). No FIN/RST is sent; the server still sees client traffic until keepalive/app timeouts.
-- `halfup` adds an upstream `limit_data` toxic with `bytes=0`, blackholing client→server. The socket stays open but the server won’t see client packets.
-- Use `up` to remove `halfdown`, `halfup`, `timeout`, and `down` toxics.
+Both apps embed `ts=<unix_ms>|seq=<n>|` at the start of payloads. Receivers log per‑message latency as `latency_ms = recv_ts_ms − pub_ts_ms` with sequence. Use the helper to capture a time window and generate CSVs + a PNG‑based HTML report.
 
-### Full Blackhole (Both Directions)
+Requirements:
+- Python 3
+- gnuplot (for charts)
+  - macOS: `brew install gnuplot`
+  - Ubuntu/Debian: `sudo apt-get update && sudo apt-get install -y gnuplot`
+  - Fedora: `sudo dnf install -y gnuplot`
+  - CentOS/RHEL: `sudo yum install -y gnuplot`
+  - Arch: `sudo pacman -S gnuplot`
+  - Alpine: `sudo apk add gnuplot`
 
-- `blackhole [ms]` adds a downstream `timeout_down` and upstream `timeout_up` toxic. With a large timeout (default ~1 year), both directions are blocked without FIN/RST so both ends think the connection is alive until their keepalive or app timeouts fire.
-- Use `up` to remove `timeout_down`/`timeout_up`.
+Helper script (reporting):
+- `bash scripts/latency-report.sh [--pre N] [--post N] [--] [command ...]`
+
+Examples:
+- Capture 5s before and 10s after a netem change:
+  `bash scripts/latency-report.sh --pre 5 --post 10 -- bash scripts/netem.sh shape 120 20 2 10 1mbps`
+- Capture around a toxiproxy latency change:
+  `bash scripts/latency-report.sh --pre 5 --post 10 -- bash scripts/mqtt-proxy.sh latency 120 40 both`
+
+Outputs (under `captures/latency-<ts>/`):
+- `latency_offer.csv`, `latency_ride.csv`, `latency_location.csv` with columns: `seq,latency_ms,pub_ts_ms,recv_ts_ms`.
+- Missing publishes (not received within window): `latency_offer_missing.csv`, `latency_ride_missing.csv`, `latency_location_missing.csv` (seq, pub_ts_ms).
+- Per-second delivery rate CSV per topic: `rate_<topic>.csv` with columns `second_unix,published,received,delivered_ratio`.
+- Summary files: `summary.json` and `summary.txt` with totals, delivered ratio, and latency stats (min/mean/p50/p95/p99/max) per topic.
+- HTML report: `index.html` summarizes stats and embeds generated PNG charts; requires `gnuplot` to render charts.
+
+Notes:
+- The script uses `docker logs --since/--until` to bound the time window. Adjust `--pre`/`--post` to include exactly the period you care about.
+- Open `index.html` to see: latency line charts, missing markers (red), publish vs receive rates, and delivered ratios. Click any image to expand it (full‑screen lightbox). If charts are missing, install `gnuplot` and rerun the report.
+
+What the charts mean:
+- Latency vs Seq: per‑message latency for received messages; x‑axis is published sequence.
+- Latency + Missing: same latency line plus red markers at y=0 for publishes with no receive inside the window.
+- Published vs Received per Second: published counts grouped by publish second; received counts by receive second (time on x‑axis).
+- Delivered Ratio per Pub‑Second: for each publish second, delivered/published ∈ [0,1].
+
+Screenshot
+
+![Latency report (sample)](docs/img/latency-report.jpg)
 
 ## Profiling
 
@@ -321,50 +365,6 @@ Notes:
 - With persistent sessions (`clean_session: false`), the broker retains subscriptions and queued QoS 1/2 messages; both apps still safely resubscribe.
 - Under full blackhole conditions (no FIN/RST), detection depends on keepalive; expect `~1×KA` to send PINGREQ and up to `~1.5×KA` for disconnect at the broker side. Client‑side may trigger earlier if `ping_timeout_ms` elapses (Go) or Paho Java detects missing PINGRESPs.
 
-
-## Latency Charts (Per Topic)
-
-Both apps embed `ts=<unix_ms>|seq=<n>|` at the start of payloads. Receivers log per‑message latency as `latency_ms = recv_ts_ms − pub_ts_ms` with sequence. Use the helper to capture a time window and generate CSVs + a PNG‑based HTML report.
-
-Requirements:
-- Python 3
-- gnuplot (for charts)
-  - macOS: `brew install gnuplot`
-  - Ubuntu/Debian: `sudo apt-get update && sudo apt-get install -y gnuplot`
-  - Fedora: `sudo dnf install -y gnuplot`
-  - CentOS/RHEL: `sudo yum install -y gnuplot`
-  - Arch: `sudo pacman -S gnuplot`
-  - Alpine: `sudo apk add gnuplot`
-
-Helper script:
-- `bash scripts/latency-report.sh [--pre N] [--post N] [--] [command ...]`
-
-Examples:
-- Capture 5s before and 10s after a netem change:
-  `bash scripts/latency-report.sh --pre 5 --post 10 -- bash scripts/netem.sh shape 120 20 2 10 1mbps`
-- Capture around a toxiproxy latency change:
-  `bash scripts/latency-report.sh --pre 5 --post 10 -- bash scripts/mqtt-proxy.sh latency 120 40 both`
-
-Outputs (under `captures/latency-<ts>/`):
-- `latency_offer.csv`, `latency_ride.csv`, `latency_location.csv` with columns: `seq,latency_ms,pub_ts_ms,recv_ts_ms`.
-- Missing publishes (not received within window): `latency_offer_missing.csv`, `latency_ride_missing.csv`, `latency_location_missing.csv` (seq, pub_ts_ms).
-- Per-second delivery rate CSV per topic: `rate_<topic>.csv` with columns `second_unix,published,received,delivered_ratio`.
-- Summary files: `summary.json` and `summary.txt` with totals, delivered ratio, and latency stats (min/mean/p50/p95/p99/max) per topic.
-- HTML report: `index.html` summarizes stats and embeds generated PNG charts; requires `gnuplot` to render charts.
-
-Notes:
-- The script uses `docker logs --since/--until` to bound the time window. Adjust `--pre`/`--post` to include exactly the period you care about.
-- Open `index.html` to see: latency line charts, missing markers (red), publish vs receive rates, and delivered ratios. Click any image to expand it (full‑screen lightbox). If charts are missing, install `gnuplot` and rerun the report.
-
-What the charts mean:
-- Latency vs Seq: per‑message latency for received messages; x‑axis is published sequence.
-- Latency + Missing: same latency line plus red markers at y=0 for publishes with no receive inside the window.
-- Published vs Received per Second: published counts grouped by publish second; received counts by receive second (time on x‑axis).
-- Delivered Ratio per Pub‑Second: for each publish second, delivered/published ∈ [0,1].
-
-Screenshot
-
-![Latency report (sample)](docs/img/latency-report.png)
 
 ## Troubleshooting Container (netshoot)
 
