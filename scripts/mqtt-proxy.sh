@@ -23,6 +23,8 @@ Commands:
   halfdown               Blackhole downstream (server->client) using limit_data (sim half‑open client)
   halfup                 Blackhole upstream (client->server) using limit_data (sim half‑open server)
   blackhole [ms]         Block both directions with timeout toxics (no FIN/RST). Default ~1yr
+  latency <ms> [jitter]  Add latency toxic(s). jitter defaults to 0. dir via third arg: up|down|both (default both)
+  unlatency              Remove latency toxics if present
   packetloss <pct> [dir] Add slicer toxic(s) with given percentage (0-100). dir: up|down|both (default both)
   unpacketloss           Remove packetloss toxics if present
   bandwidth <rate> [dir] Limit bandwidth using bandwidth toxic. rate supports suffix: bps, kbps, mbps. 0 = full down
@@ -57,6 +59,8 @@ up() {
   api DELETE "/proxies/$PROXY/toxics/halfup" || true
   api DELETE "/proxies/$PROXY/toxics/timeout_down" || true
   api DELETE "/proxies/$PROXY/toxics/timeout_up" || true
+  api DELETE "/proxies/$PROXY/toxics/latency_down" || true
+  api DELETE "/proxies/$PROXY/toxics/latency_up" || true
   api DELETE "/proxies/$PROXY/toxics/packetloss_down" || true
   api DELETE "/proxies/$PROXY/toxics/packetloss_up" || true
   api DELETE "/proxies/$PROXY/toxics/bandwidth_down" || true
@@ -103,6 +107,39 @@ blackhole() {
   api POST "/proxies/$PROXY/toxics" \
     -H 'Content-Type: application/json' \
     -d '{"name":"timeout_up","type":"timeout","stream":"upstream","attributes":{"timeout":'"$ms"'}}' || true
+}
+
+# Latency and jitter simulation via Toxiproxy latency toxic
+# Usage: latency <ms> [jitter_ms] [dir]
+latency_cmd() {
+  local delay_ms=${1:?delay milliseconds required}
+  local jitter_ms=${2:-0}
+  local dir=${3:-both}
+  if ! [[ $delay_ms =~ ^[0-9]+$ && $jitter_ms =~ ^[0-9]+$ ]]; then
+    echo "invalid delay/jitter: delay=$delay_ms jitter=$jitter_ms" >&2; exit 1
+  fi
+  echo "[toxiproxy] setting latency delay=${delay_ms}ms jitter=${jitter_ms}ms on $PROXY (dir=$dir)"
+  # remove existing
+  api DELETE "/proxies/$PROXY/toxics/latency_down" || true
+  api DELETE "/proxies/$PROXY/toxics/latency_up" || true
+  case "$dir" in
+    down|downstream)
+      api POST "/proxies/$PROXY/toxics" -H 'Content-Type: application/json' \
+        -d '{"name":"latency_down","type":"latency","stream":"downstream","attributes":{"latency":'"$delay_ms"',"jitter":'"$jitter_ms"'}}' || true ;;
+    up|upstream)
+      api POST "/proxies/$PROXY/toxics" -H 'Content-Type: application/json' \
+        -d '{"name":"latency_up","type":"latency","stream":"upstream","attributes":{"latency":'"$delay_ms"',"jitter":'"$jitter_ms"'}}' || true ;;
+    both|*)
+      api POST "/proxies/$PROXY/toxics" -H 'Content-Type: application/json' \
+        -d '{"name":"latency_down","type":"latency","stream":"downstream","attributes":{"latency":'"$delay_ms"',"jitter":'"$jitter_ms"'}}' || true
+      api POST "/proxies/$PROXY/toxics" -H 'Content-Type: application/json' \
+        -d '{"name":"latency_up","type":"latency","stream":"upstream","attributes":{"latency":'"$delay_ms"',"jitter":'"$jitter_ms"'}}' || true ;;
+  esac
+}
+
+unlatency() {
+  api DELETE "/proxies/$PROXY/toxics/latency_down" || true
+  api DELETE "/proxies/$PROXY/toxics/latency_up" || true
 }
 
 # Packet loss simulation
@@ -235,6 +272,8 @@ case "$cmd" in
   halfdown) halfdown ;;
   halfup) halfup ;;
   blackhole) shift; blackhole "${1:-}" ;;
+  latency) shift; latency_cmd "${1:-}" "${2:-0}" "${3:-both}" ;;
+  unlatency) unlatency ;;
   packetloss) shift; packetloss "${1:-}" "${2:-both}" ;;
   unpacketloss) unpacketloss ;;
   bandwidth) shift; bandwidth "${1:-}" "${2:-both}" ;;

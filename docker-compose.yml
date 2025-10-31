@@ -82,6 +82,17 @@ services:
     volumes:
       - ./toxiproxy/config.json:/config/config.json:ro
 
+  network-troubleshooting:
+    image: nicolaka/netshoot:latest
+    container_name: network-troubleshooting
+    command: ["sleep", "infinity"]
+    # Share network namespace with toxiproxy for direct visibility and control
+    network_mode: "container:toxiproxy"
+    depends_on: [ toxiproxy ]
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
   # toxiproxy-init no longer required; using static config above
 
   go-backend:

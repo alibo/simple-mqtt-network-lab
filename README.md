@@ -25,6 +25,8 @@ Services:
   - Proxy preconfigured via `toxiproxy/config.json` (listen `0.0.0.0:18830` → upstream `mqtt-gateway:1883`).
 - Go backend profiling: http://localhost:6060/debug/pprof
 - Java client profiling: http://localhost:6061 (see endpoints below)
+ - Network troubleshooting helper: container `network-troubleshooting` shares toxiproxy's netns
+   (tools: tcpdump, mtr, dig, curl, tc, etc.).
 
 Logs are printed to stdout for each service. Stop with Ctrl+C; Compose triggers graceful shutdown for the apps.
 
@@ -132,7 +134,7 @@ publish:
   location_every_ms: 1000
 ```
 
-## Toxiproxy Usage (Full Drop on Demand)
+## Toxiproxy Usage (Impairments)
 
 The Java client connects to Toxiproxy (`localhost:18830`), which forwards to the gateway. The proxy is created at boot from `toxiproxy/config.json`.
 
@@ -144,6 +146,12 @@ Helper script (recommended):
   - Half‑open (client view, block server→client): `bash scripts/mqtt-proxy.sh halfdown`
   - Half‑open (server view, block client→server): `bash scripts/mqtt-proxy.sh halfup`
   - Blackhole both ways (no FIN/RST): `bash scripts/mqtt-proxy.sh blackhole` (or `blackhole 600000` for 10m)
+  - Latency and jitter: `bash scripts/mqtt-proxy.sh latency 120 40 [down|up|both]` (default jitter=0, both directions)
+  - Clear latency: `bash scripts/mqtt-proxy.sh unlatency`
+  - Bandwidth limit: `bash scripts/mqtt-proxy.sh bandwidth 256kbps [down|up|both]` (use `bps|kbps|mbps` or bytes/s)
+  - Clear bandwidth: `bash scripts/mqtt-proxy.sh unbandwidth`
+  - Approx packet loss: `bash scripts/mqtt-proxy.sh packetloss 20 [down|up|both]` (uses slicer; not real per‑packet drop)
+  - Clear packet loss: `bash scripts/mqtt-proxy.sh unpacketloss`
   - Status: `bash scripts/mqtt-proxy.sh status`
   - Env: set `TOXIPROXY_URL` if not `http://localhost:8474` (default).
 
@@ -154,7 +162,7 @@ Direct API examples:
 curl -s http://localhost:8474/proxies | jq .
 ```
 
-- Create the MQTT proxy (compose does this automatically via `toxiproxy-init`):
+- Create the MQTT proxy (compose already does this via `toxiproxy/config.json`):
 ```bash
 curl -s -X POST http://localhost:8474/proxies \
   -H 'Content-Type: application/json' \
@@ -274,6 +282,42 @@ Notes:
 - With clean sessions enabled (default), subscriptions are re‑issued on reconnect (both apps already do this in their connect handlers).
 - With persistent sessions (`clean_session: false`), the broker retains subscriptions and queued QoS 1/2 messages; both apps still safely resubscribe.
 - Under full blackhole conditions (no FIN/RST), detection depends on keepalive; expect `~1×KA` to send PINGREQ and up to `~1.5×KA` for disconnect at the broker side. Client‑side may trigger earlier if `ping_timeout_ms` elapses (Go) or Paho Java detects missing PINGRESPs.
+
+## Network Impairments (tc NetEm)
+
+For true per‑packet loss/jitter/latency at the OS level, use the NetEm helper. It applies `tc netem` in the Toxiproxy network namespace so all proxied MQTT traffic is affected.
+
+- Helper script: `bash scripts/netem.sh`
+- Defaults: `TARGET=toxiproxy`, `IFACE=eth0`, and it will exec into the `network-troubleshooting` container if present; otherwise it starts a short‑lived helper.
+
+Examples:
+- Show current qdisc: `bash scripts/netem.sh status`
+- 120ms delay with 40ms jitter: `bash scripts/netem.sh delay 120 40`
+- 5% packet loss: `bash scripts/netem.sh loss 5`
+- Combine delay+loss: `bash scripts/netem.sh shape 120 20 2 10`
+- Clear NetEm: `bash scripts/netem.sh clear`
+
+Notes:
+- This is real packet impairment below TCP, unlike Toxiproxy's slicer toxic which only fragments streams.
+- Requires NET_ADMIN capability; the `network-troubleshooting` container has it by default.
+
+## Troubleshooting Container (netshoot)
+
+A persistent `nicolaka/netshoot` container named `network-troubleshooting` shares the network namespace with Toxiproxy for deep inspection.
+
+- Start automatically with compose: `docker compose up -d network-troubleshooting` (included in the default stack)
+- Shell: `docker exec -it network-troubleshooting bash`
+- Common tools available: tcpdump, tshark, dig, nslookup, curl, mtr, arping, tc, ss, iproute2.
+- Capture MQTT proxy traffic to pcap: `docker exec -it network-troubleshooting tcpdump -i eth0 -n port 18830 -w /tmp/mqtt.pcap`
+
+Helper script for capture: `bash scripts/capture.sh`
+- Save MQTT proxy traffic 60s to /tmp/mqtt-proxy.pcap: `bash scripts/capture.sh port 60 mqtt-proxy.pcap`
+- Save custom filter 30s: `bash scripts/capture.sh filter "host mqtt-gateway" 30 gw.pcap`
+- Live sniff (Ctrl+C to stop): `bash scripts/capture.sh live "port 18830"`
+- List saved pcaps: `bash scripts/capture.sh list`
+- Copy to host: `bash scripts/capture.sh copy mqtt-proxy.pcap ./captures`
+
+Design choices: Toxiproxy toxics simulate stream conditions (latency, bandwidth, half‑open, fragmentation). For realistic packet loss/reordering/corruption, prefer NetEm.
 
 ## Operational Notes
 
