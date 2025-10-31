@@ -10,6 +10,22 @@ This is a minimal, production‑minded lab to exercise an MQTT v3.1 mobile clien
 
 All app images use Debian slim bases. No Prometheus, no Grafana, no Streamlit UI.
 
+## Table of Contents
+
+- [Quickstart](#quickstart)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [Toxiproxy Usage (Impairments)](#toxiproxy-usage-impairments)
+  - [OS-level Impairments with tc netem](#os-level-impairments-with-tc-netem)
+- [Latency Charts (Per Topic)](#latency-charts-per-topic)
+- [Profiling](#profiling)
+- [MQTT Gateway & EMQX](#mqtt-gateway--emqx)
+- [MQTT Keepalive & Reconnect](#mqtt-keepalive--reconnect)
+- [Troubleshooting Container (netshoot)](#troubleshooting-container-netshoot)
+- [Operational Notes](#operational-notes)
+- [Message Payload Format](#message-payload-format)
+- [Tests](#tests)
+
 ## Quickstart
 
 ```bash
@@ -193,6 +209,28 @@ curl -s -X DELETE http://localhost:8474/proxies/mqtt/toxics/timeout5s
 
 Note: Toxiproxy 2.5 treats `enabled` as read-only via the REST API; use toxics (above) or delete/recreate the proxy instead.
 
+### OS-level Impairments with tc netem
+
+For true per‑packet loss/jitter/latency at the OS level, use the NetEm helper. It applies `tc netem` in the Toxiproxy network namespace so all proxied MQTT traffic is affected.
+
+- Helper script: `bash scripts/netem.sh`
+- Defaults: `TARGET=toxiproxy`, `IFACE=eth0`, and it will exec into the `network-troubleshooting` container if present; otherwise it starts a short‑lived helper.
+
+Examples:
+- Show current qdisc: `bash scripts/netem.sh status`
+- 120ms delay with 40ms jitter: `bash scripts/netem.sh delay 120 40`
+- 5% packet loss: `bash scripts/netem.sh loss 5`
+- Combine delay+loss: `bash scripts/netem.sh shape 120 20 2 10`
+- Egress bandwidth limit: `bash scripts/netem.sh rate 512kbps` (accepts `kbps|mbps` or `kbit|mbit`)
+- Combine all (with bandwidth): `bash scripts/netem.sh shape 120 20 2 10 1mbps`
+- Clear NetEm: `bash scripts/netem.sh clear`
+
+Notes:
+- This is real packet impairment below TCP, unlike Toxiproxy's slicer toxic which only fragments streams.
+- Requires NET_ADMIN capability; the `network-troubleshooting` container has it by default.
+- Bandwidth limiting uses a TBF child qdisc under the `netem` root and shapes egress on the target interface. It typically affects both directions of proxied flows since traffic in each direction egresses that interface.
+- You can override TBF tuning via env: `TBF_BURST` (default `32kbit`) and `TBF_LATENCY` (default `400ms`).
+
 ### Half‑Open Simulation
 
 - `halfdown` adds a downstream `limit_data` toxic with `bytes=0`, effectively blackholing server→client. The client keeps sending (e.g., PINGREQ, publishes) but never receives responses (PINGRESP, PUBACK). No FIN/RST is sent; the server still sees client traffic until keepalive/app timeouts.
@@ -283,27 +321,6 @@ Notes:
 - With persistent sessions (`clean_session: false`), the broker retains subscriptions and queued QoS 1/2 messages; both apps still safely resubscribe.
 - Under full blackhole conditions (no FIN/RST), detection depends on keepalive; expect `~1×KA` to send PINGREQ and up to `~1.5×KA` for disconnect at the broker side. Client‑side may trigger earlier if `ping_timeout_ms` elapses (Go) or Paho Java detects missing PINGRESPs.
 
-## Network Impairments (tc NetEm)
-
-For true per‑packet loss/jitter/latency at the OS level, use the NetEm helper. It applies `tc netem` in the Toxiproxy network namespace so all proxied MQTT traffic is affected.
-
-- Helper script: `bash scripts/netem.sh`
-- Defaults: `TARGET=toxiproxy`, `IFACE=eth0`, and it will exec into the `network-troubleshooting` container if present; otherwise it starts a short‑lived helper.
-
-Examples:
-- Show current qdisc: `bash scripts/netem.sh status`
-- 120ms delay with 40ms jitter: `bash scripts/netem.sh delay 120 40`
-- 5% packet loss: `bash scripts/netem.sh loss 5`
-- Combine delay+loss: `bash scripts/netem.sh shape 120 20 2 10`
-- Egress bandwidth limit: `bash scripts/netem.sh rate 512kbps` (accepts `kbps|mbps` or `kbit|mbit`)
-- Combine all (with bandwidth): `bash scripts/netem.sh shape 120 20 2 10 1mbps`
-- Clear NetEm: `bash scripts/netem.sh clear`
-
-Notes:
-- This is real packet impairment below TCP, unlike Toxiproxy's slicer toxic which only fragments streams.
-- Requires NET_ADMIN capability; the `network-troubleshooting` container has it by default.
-- Bandwidth limiting uses a TBF child qdisc under the `netem` root and shapes egress on the target interface. It typically affects both directions of proxied flows since traffic in each direction egresses that interface.
-- You can override TBF tuning via env: `TBF_BURST` (default `32kbit`) and `TBF_LATENCY` (default `400ms`).
 
 ## Latency Charts (Per Topic)
 
@@ -344,6 +361,10 @@ What the charts mean:
 - Latency + Missing: same latency line plus red markers at y=0 for publishes with no receive inside the window.
 - Published vs Received per Second: published counts grouped by publish second; received counts by receive second (time on x‑axis).
 - Delivered Ratio per Pub‑Second: for each publish second, delivered/published ∈ [0,1].
+
+Screenshot
+
+![Latency report (sample)](docs/img/latency-report.png)
 
 ## Troubleshooting Container (netshoot)
 
