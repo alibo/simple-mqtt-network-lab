@@ -17,7 +17,7 @@ retry:
 
 publish:
   offer_every_ms: 1000
-  ride_every_ms: 2000
+  ride_every_ms: 1000
 
 qos:
   location: 0

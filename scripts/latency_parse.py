@@ -264,7 +264,7 @@ def main():
                 payload = (client_cfg.get('payload_bytes') or {}).get('location')
                 m = client_cfg.get('mqtt') or {}
                 pub_every = (client_cfg.get('publish') or {}).get('location_every_ms')
-                pub = {'publisher':'java-client','client_id': m.get('client_id'), 'host': m.get('host'), 'port': m.get('port'), 'keepalive_secs': m.get('keepalive_secs'), 'clean_session': m.get('clean_session'), 'qos': qos, 'payload_bytes': payload, 'publish_interval_ms': pub_every}
+                pub = {'publisher':'java-client','client_id': m.get('client_id'), 'host': m.get('host'), 'port': m.get('port'), 'keepalive_secs': m.get('keepalive_secs'), 'clean_session': m.get('clean_session'), 'qos': qos, 'payload_bytes': payload, 'publish_interval_ms': pub_every, 'separate_pubsub_connections': m.get('separate_pubsub_connections')}
             else:
                 qos = (backend_cfg.get('qos') or {}).get(key)
                 payload = (backend_cfg.get('payload_bytes') or {}).get(key)
@@ -384,6 +384,7 @@ def main():
                 item('port', cfg.get('port')),
                 item('keepalive_secs', cfg.get('keepalive_secs')),
                 item('clean_session', cfg.get('clean_session')),
+                item('separate_pubsub_connections', cfg.get('separate_pubsub_connections')),
                 item('qos', cfg.get('qos')),
                 item('payload_bytes', cfg.get('payload_bytes')),
                 item('publish_interval_ms', cfg.get('publish_interval_ms')),

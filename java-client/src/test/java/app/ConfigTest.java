@@ -29,6 +29,7 @@ public class ConfigTest {
         assertEquals(15, c.keepAlive, "default keepalive");
         assertEquals("cid", c.clientId);
         assertEquals(1883, c.port);
+        assertFalse(c.separatePubSubConnections, "default separate_pubsub_connections");
     }
 
     @Test
@@ -39,6 +40,7 @@ public class ConfigTest {
               port: 1999
               client_id: x
               keepalive_secs: 20
+              separate_pubsub_connections: true
             publish:
               location_every_ms: 250
             qos:
@@ -55,6 +57,6 @@ public class ConfigTest {
         assertEquals(250, c.locationEveryMs);
         assertEquals(10, c.maxInflight);
         assertEquals(64, c.payloadLocation);
+        assertTrue(c.separatePubSubConnections, "parses separate_pubsub_connections");
     }
 }
-

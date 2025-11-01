@@ -2,9 +2,13 @@ mqtt:
   host: toxiproxy
   port: 18830
   client_id: java-1
-  keepalive_secs: 30
+  keepalive_secs: 10
   protocol_version: 3  # MQTT 3.1
   clean_session: false  # whether to start a clean session (default)
+  # When true, use two separate MQTT connections: one for publishing to /driver/location
+  # and a second for subscribing to /driver/offer and /driver/ride.
+  # Client IDs will be derived as "<client_id>-pub" and "<client_id>-sub".
+  separate_pubsub_connections: true
 
 retry:
   enabled: true

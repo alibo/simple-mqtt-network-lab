@@ -21,6 +21,7 @@ All app images use Debian slim bases. No Prometheus, no Grafana, no Streamlit UI
 - [Profiling](#profiling)
 - [MQTT Gateway & EMQX](#mqtt-gateway--emqx)
 - [MQTT Keepalive & Reconnect](#mqtt-keepalive--reconnect)
+- [Dual Connections (Pub/Sub)](#dual-connections-pubsub)
 - [Troubleshooting Container (netshoot)](#troubleshooting-container-netshoot)
 - [Operational Notes](#operational-notes)
 - [Message Payload Format](#message-payload-format)
@@ -122,6 +123,10 @@ mqtt:
   keepalive_secs: 30
   protocol_version: 3   # MQTT 3.1
   clean_session: true    # default
+  # Optional: use two separate MQTT connections
+  # - publisher: publishes /driver/location with client_id "java-1-pub"
+  # - subscriber: consumes /driver/offer and /driver/ride with client_id "java-1-sub"
+  separate_pubsub_connections: false
 retry:
   enabled: true
   automatic_reconnect: true
@@ -149,6 +154,19 @@ log:
 publish:
   location_every_ms: 1000
 ```
+
+## Dual Connections (Pub/Sub)
+
+To compare packet loss and TCP congestion behavior with one vs two MQTT connections, the Java client can split publishing and subscribing over separate connections.
+
+- Enable in `configs/client.yaml` under `mqtt.separate_pubsub_connections: true`.
+- Client IDs derive automatically: `<client_id>-pub` for publishes to `/driver/location`, `<client_id>-sub` for subscriptions to `/driver/offer` and `/driver/ride`.
+- Logs include `connected_pub=` and `connected_sub=` in the periodic `[stats]` line to see each connection’s state. Per-message logs and the `[publish]` lines remain unchanged for reporting.
+
+Suggested experiment:
+- Single connection: set `separate_pubsub_connections: false`, run a packet loss scenario (e.g., `bash scripts/netem.sh loss 5`) and capture with `bash scripts/latency-report.sh --pre 5 --post 20 -- bash scripts/netem.sh loss 5`.
+- Dual connections: switch to `true`, rebuild `docker compose up --build`, repeat the same impairment and capture.
+- Compare delivered ratios and latency distributions for `/driver/location` vs `/driver/offer` and `/driver/ride` across the two runs.
 
 ## Toxiproxy Usage (Impairments)
 

@@ -31,6 +31,7 @@ class Config {
     int qosLocation, qosOffer, qosRide; int payloadLocation;
     boolean tcpKeepAlive, tcpNoDelay; int rcvBuf, sndBuf;
     int maxInflight; boolean bufEnabled; int bufSize; boolean bufDropOldest; boolean bufPersist; boolean debug;
+    boolean separatePubSubConnections;
 
     @SuppressWarnings("unchecked") private static Map<String,Object> mapOf(Object o){ return (o instanceof Map)? (Map<String,Object>) o : new LinkedHashMap<>(); }
     private static String s(Map<String,Object> m, String k, String d){ Object v=m.get(k); return v instanceof String && !((String)v).isEmpty()? (String)v: d; }
@@ -55,6 +56,7 @@ class Config {
         c.clientId = s(mq, "client_id", "java-1");
         c.keepAlive = i(mq, "keepalive_secs", 15);
         c.protocolVersion = i(mq, "protocol_version", 3);
+        c.separatePubSubConnections = b(mq, "separate_pubsub_connections", false);
         c.retryEnabled = b(ry, "enabled", true);
         c.autoReconnect = b(ry, "automatic_reconnect", true);
         c.connectTimeoutMs = i(ry, "connect_timeout_ms", 5000);
@@ -114,8 +116,8 @@ public class Main {
         Config cfg = Config.load(cfgPath);
         logf("timezone local id=%s", ZoneId.systemDefault());
         logf("starting with config file: %s", cfgPath);
-        logf("starting with config: host=%s port=%d clientId=%s keepAlive=%ds proto=%d cleanSession=%s qos{loc=%d,offer=%d,ride=%d} payload{loc=%d} inflightMax=%d buf{enabled=%s,size=%d,dropOldest=%s,persist=%s} debug=%s",
-                cfg.host, cfg.port, cfg.clientId, cfg.keepAlive, cfg.protocolVersion, String.valueOf(cfg.cleanSession), cfg.qosLocation, cfg.qosOffer, cfg.qosRide, cfg.payloadLocation, cfg.maxInflight, String.valueOf(cfg.bufEnabled), cfg.bufSize, String.valueOf(cfg.bufDropOldest), String.valueOf(cfg.bufPersist), String.valueOf(cfg.debug));
+        logf("starting with config: host=%s port=%d clientId=%s keepAlive=%ds proto=%d cleanSession=%s separatePubSub=%s qos{loc=%d,offer=%d,ride=%d} payload{loc=%d} inflightMax=%d buf{enabled=%s,size=%d,dropOldest=%s,persist=%s} debug=%s",
+                cfg.host, cfg.port, cfg.clientId, cfg.keepAlive, cfg.protocolVersion, String.valueOf(cfg.cleanSession), String.valueOf(cfg.separatePubSubConnections), cfg.qosLocation, cfg.qosOffer, cfg.qosRide, cfg.payloadLocation, cfg.maxInflight, String.valueOf(cfg.bufEnabled), cfg.bufSize, String.valueOf(cfg.bufDropOldest), String.valueOf(cfg.bufPersist), String.valueOf(cfg.debug));
 
         // Profiling HTTP (threads + JFR)
         startProfilingServer();
@@ -138,34 +140,64 @@ public class Main {
 
         // MQTT
         String uri = String.format("tcp://%s:%d", cfg.host, cfg.port);
-        MqttAsyncClient cli = new MqttAsyncClient(uri, cfg.clientId);
-        MqttConnectOptions opt = new MqttConnectOptions();
-        opt.setMqttVersion(MqttConnectOptions.MQTT_VERSION_3_1);
-        opt.setCleanSession(cfg.cleanSession);
-        opt.setKeepAliveInterval(cfg.keepAlive);
-        opt.setConnectionTimeout(cfg.connectTimeoutMs/1000);
-        opt.setAutomaticReconnect(cfg.autoReconnect);
-        try { opt.setMaxReconnectDelay(cfg.maxReconnectDelayMs); } catch (Throwable ignored) {}
-        try { opt.setMaxInflight(cfg.maxInflight); } catch (Throwable ignored) {}
-        opt.setSocketFactory(new TuningSocketFactory(cfg.tcpKeepAlive, cfg.tcpNoDelay, cfg.rcvBuf, cfg.sndBuf));
-        DisconnectedBufferOptions dbo = new DisconnectedBufferOptions();
-        dbo.setBufferEnabled(cfg.bufEnabled);
-        dbo.setBufferSize(cfg.bufSize);
-        dbo.setDeleteOldestMessages(cfg.bufDropOldest);
-        dbo.setPersistBuffer(cfg.bufPersist);
-        cli.setBufferOpts(dbo);
-        cli.setManualAcks(false);
+        // Build publisher and subscriber clients (may be the same in single-connection mode)
+        String pubId = cfg.clientId + (cfg.separatePubSubConnections ? "-pub" : "");
+        String subId = cfg.clientId + (cfg.separatePubSubConnections ? "-sub" : "");
+
+        MqttAsyncClient cliPub = new MqttAsyncClient(uri, pubId);
+        MqttAsyncClient cliSub = cfg.separatePubSubConnections ? new MqttAsyncClient(uri, subId) : cliPub; // reuse if single
+
+        MqttConnectOptions optPub = new MqttConnectOptions();
+        optPub.setMqttVersion(MqttConnectOptions.MQTT_VERSION_3_1);
+        optPub.setCleanSession(cfg.cleanSession);
+        optPub.setKeepAliveInterval(cfg.keepAlive);
+        optPub.setConnectionTimeout(cfg.connectTimeoutMs/1000);
+        optPub.setAutomaticReconnect(cfg.autoReconnect);
+        try { optPub.setMaxReconnectDelay(cfg.maxReconnectDelayMs); } catch (Throwable ignored) {}
+        try { optPub.setMaxInflight(cfg.maxInflight); } catch (Throwable ignored) {}
+        optPub.setSocketFactory(new TuningSocketFactory(cfg.tcpKeepAlive, cfg.tcpNoDelay, cfg.rcvBuf, cfg.sndBuf));
+
+        MqttConnectOptions optSub = optPub;
+        if (cfg.separatePubSubConnections) {
+            optSub = new MqttConnectOptions();
+            optSub.setMqttVersion(MqttConnectOptions.MQTT_VERSION_3_1);
+            optSub.setCleanSession(cfg.cleanSession);
+            optSub.setKeepAliveInterval(cfg.keepAlive);
+            optSub.setConnectionTimeout(cfg.connectTimeoutMs/1000);
+            optSub.setAutomaticReconnect(cfg.autoReconnect);
+            try { optSub.setMaxReconnectDelay(cfg.maxReconnectDelayMs); } catch (Throwable ignored) {}
+            try { optSub.setMaxInflight(cfg.maxInflight); } catch (Throwable ignored) {}
+            optSub.setSocketFactory(new TuningSocketFactory(cfg.tcpKeepAlive, cfg.tcpNoDelay, cfg.rcvBuf, cfg.sndBuf));
+        }
+
+        DisconnectedBufferOptions dboPub = new DisconnectedBufferOptions();
+        dboPub.setBufferEnabled(cfg.bufEnabled);
+        dboPub.setBufferSize(cfg.bufSize);
+        dboPub.setDeleteOldestMessages(cfg.bufDropOldest);
+        dboPub.setPersistBuffer(cfg.bufPersist);
+        cliPub.setBufferOpts(dboPub);
+        cliPub.setManualAcks(false);
+
+        if (cfg.separatePubSubConnections) {
+            DisconnectedBufferOptions dboSub = new DisconnectedBufferOptions();
+            dboSub.setBufferEnabled(cfg.bufEnabled);
+            dboSub.setBufferSize(cfg.bufSize);
+            dboSub.setDeleteOldestMessages(cfg.bufDropOldest);
+            dboSub.setPersistBuffer(cfg.bufPersist);
+            cliSub.setBufferOpts(dboSub);
+            cliSub.setManualAcks(false);
+        }
 
         // Counters shared with callback and stats
         final AtomicLong recvOffer = new AtomicLong();
         final AtomicLong recvRide = new AtomicLong();
 
-        cli.setCallback(new MqttCallbackExtended() {
+        cliSub.setCallback(new MqttCallbackExtended() {
             @Override public void connectComplete(boolean reconnect, String serverURI) {
                 logf("%s server=%s reconnect=%s", tag("connect", COL_BLUE), serverURI, reconnect);
                 // Ensure subscriptions on initial connect and reconnects
-                try { cli.subscribe("/driver/offer", cfg.qosOffer).waitForCompletion(5000); } catch (MqttException e) { logf("subscribe error: %s", e); }
-                try { cli.subscribe("/driver/ride", cfg.qosRide).waitForCompletion(5000); } catch (MqttException e) { logf("subscribe error: %s", e); }
+                try { cliSub.subscribe("/driver/offer", cfg.qosOffer).waitForCompletion(5000); } catch (MqttException e) { logf("subscribe error: %s", e); }
+                try { cliSub.subscribe("/driver/ride", cfg.qosRide).waitForCompletion(5000); } catch (MqttException e) { logf("subscribe error: %s", e); }
             }
             @Override public void connectionLost(Throwable cause) { logf("%s cause=%s", tag("disconnect", COL_YELLOW), String.valueOf(cause)); }
             @Override public void messageArrived(String topic, MqttMessage message) {
@@ -184,7 +216,12 @@ public class Main {
         int attempts = 0;
         while (true) {
             try {
-                cli.connect(opt).waitForCompletion(10000);
+                if (cfg.separatePubSubConnections) {
+                    cliSub.connect(optSub).waitForCompletion(10000);
+                    cliPub.connect(optPub).waitForCompletion(10000);
+                } else {
+                    cliSub.connect(optSub).waitForCompletion(10000); // same as cliPub
+                }
                 break;
             } catch (MqttException e) {
                 attempts++;
@@ -208,7 +245,7 @@ public class Main {
                 String body = prefix + "x".repeat(size);
                 byte[] payload = body.getBytes(StandardCharsets.UTF_8);
                 logf("%s topic=/driver/location seq=%d bytes=%d pub_ts_ms=%d", tag("publish", COL_MAGENTA), s, payload.length, System.currentTimeMillis());
-                cli.publish("/driver/location", payload, cfg.qosLocation, false, null, new IMqttActionListener() {
+                cliPub.publish("/driver/location", payload, cfg.qosLocation, false, null, new IMqttActionListener() {
                     @Override public void onSuccess(IMqttToken asyncActionToken) { acked[0]++; }
                     @Override public void onFailure(IMqttToken asyncActionToken, Throwable exception) { logf("publish error: %s", exception); }
                 });
@@ -222,11 +259,13 @@ public class Main {
         stats.scheduleAtFixedRate(() -> {
             try {
                 int inflight = 0; int queued = 0;
-                try { inflight = cli.getInFlightMessageCount(); } catch (Exception ignored) {}
-                try { queued = cli.getBufferedMessageCount(); } catch (Exception ignored) {}
-                boolean connected = cli.isConnected();
-                logf("%s topic=/driver/location pub=%d ack=%d inflight=%d buffered=%d | topic=/driver/offer recv=%d | topic=/driver/ride recv=%d | connected=%s",
-                        tag("stats", COL_CYAN), published[0], acked[0], inflight, queued, recvOffer.get(), recvRide.get(), String.valueOf(connected));
+                try { inflight = cliPub.getInFlightMessageCount(); } catch (Exception ignored) {}
+                try { queued = cliPub.getBufferedMessageCount(); } catch (Exception ignored) {}
+                boolean connectedPub = cliPub.isConnected();
+                boolean connectedSub = cliSub.isConnected();
+                logf("%s topic=/driver/location pub=%d ack=%d inflight=%d buffered=%d | topic=/driver/offer recv=%d | topic=/driver/ride recv=%d | connected_pub=%s connected_sub=%s",
+                        tag("stats", COL_CYAN), published[0], acked[0], inflight, queued, recvOffer.get(), recvRide.get(), String.valueOf(connectedPub), String.valueOf(connectedSub));
+                boolean connected = connectedPub && connectedSub;
                 if (prevConn[0] && !connected) logf("connection dead (lost connectivity)");
                 if (!prevConn[0] && connected) logf("connection alive (recovered)");
                 prevConn[0] = connected;
@@ -237,8 +276,10 @@ public class Main {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logf("shutting down...");
             try { ses.shutdownNow(); stats.shutdownNow(); } catch (Exception ignored) {}
-            try { if (cli.isConnected()) cli.disconnect(); } catch (Exception ignored) {}
-            try { cli.close(); } catch (Exception ignored) {}
+            try { if (cliPub.isConnected()) cliPub.disconnect(); } catch (Exception ignored) {}
+            try { if (cfg.separatePubSubConnections && cliSub.isConnected()) cliSub.disconnect(); } catch (Exception ignored) {}
+            try { cliPub.close(); } catch (Exception ignored) {}
+            try { if (cfg.separatePubSubConnections) cliSub.close(); } catch (Exception ignored) {}
             logf("shutdown complete");
         }));
 
