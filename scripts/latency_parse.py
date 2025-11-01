@@ -191,10 +191,12 @@ def main():
 
     # Compute summary stats per topic
     def compute_stats(topic, key):
-        rows = by_topic_recv.get(topic, [])
-        pubs = by_topic_pub.get(topic, [])
-        delivered = set([seq for (seq, _, _, _) in rows])
-        latencies = [lat for (_, lat, _, _) in rows if lat >= 0]
+        rows = by_topic_recv.get(topic, [])  # receives within window
+        pubs = by_topic_pub.get(topic, [])   # publishes within window
+        pub_set = set([seq for (seq, _) in pubs])
+        # Delivered within window for messages also published within window
+        delivered_set = set([seq for (seq, _, _, _) in rows if seq in pub_set])
+        latencies = [lat for (seq, lat, pub_ts, recv_ts) in rows if lat >= 0]
         latencies.sort()
         def q(p):
             if not latencies:
@@ -207,9 +209,10 @@ def main():
             d0 = latencies[f] * (c - k)
             d1 = latencies[c] * (k - f)
             return float(d0 + d1)
-        delivered_count = len(delivered)
+        delivered_count = len(delivered_set)
         published_count = len(pubs)
         received_count = len(rows)
+        # Missing based on window-bounded publishes vs receives
         missing_count = max(0, published_count - delivered_count)
         delivered_ratio = (delivered_count/published_count) if published_count > 0 else None
         min_lat = float(latencies[0]) if latencies else None

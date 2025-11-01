@@ -25,8 +25,8 @@ qos:
   ride: 0
 
 payload_bytes:
-  offer: 4096
-  ride: 4096
+  offer: 1024
+  ride: 1024
 
 socket:
   tcp_keepalive_secs: 60

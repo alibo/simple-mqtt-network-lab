@@ -8,7 +8,7 @@ mqtt:
   # When true, use two separate MQTT connections: one for publishing to /driver/location
   # and a second for subscribing to /driver/offer and /driver/ride.
   # Client IDs will be derived as "<client_id>-pub" and "<client_id>-sub".
-  separate_pubsub_connections: true
+  separate_pubsub_connections: false
 
 retry:
   enabled: true
@@ -27,7 +27,7 @@ qos:
   ride: 0
 
 payload_bytes:
-  location: 4096
+  location: 1024
 
 socket:
   tcp_keepalive: true
